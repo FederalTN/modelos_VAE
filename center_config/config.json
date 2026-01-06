@@ -1,0 +1,7 @@
+{
+  "root_dir": "./train",
+  "chunk_seconds": 5.0,
+  "output_dir": "./train_chunks",
+  "center": 0.0,
+  "radius": 0.0
+}
