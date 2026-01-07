@@ -28,6 +28,7 @@ import pandas as pd
 import torch
 import librosa
 import matplotlib.pyplot as plt
+import importlib
 
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
@@ -148,7 +149,7 @@ def mel_to_tensor(mel_db: np.ndarray, device: str = "cpu") -> torch.Tensor:
     return torch.from_numpy(mel_db)[None, None, :, :].to(device)
 
 
-def load_encoder_model(encoder_model_path: Path, device: str = "cpu"):
+def load_encoder_model(encoder_model_path: Path, device: str = "cpu", encoder_arch: str = None):
     # 1) TorchScript
     try:
         model = torch.jit.load(str(encoder_model_path), map_location=device)
@@ -164,13 +165,109 @@ def load_encoder_model(encoder_model_path: Path, device: str = "cpu"):
         return obj, "torch_load_module"
 
     if isinstance(obj, dict):
+        # Some saved checkpoints wrap the state_dict and a config dict, e.g.
+        # {"state_dict": {...}, "config": {..., "_target_": "module.path.ClassName"}}
+        state_dict = None
+        config = None
+        if "state_dict" in obj:
+            state_dict = obj["state_dict"]
+            config = obj.get("config") or {}
+
+        # If we detected a wrapper, prefer that
+        if state_dict is not None:
+            # infer encoder_arch from config if not provided
+            inferred_arch = None
+            if isinstance(config, dict) and "_target_" in config:
+                inferred_arch = config.get("_target_")
+
+            use_arch = encoder_arch or inferred_arch
+
+            if use_arch:
+                # split module + class
+                try:
+                    module_name, class_name = use_arch.rsplit(".", 1)
+                except Exception:
+                    raise RuntimeError("encoder class path must be like 'module.path.ClassName'")
+
+                try:
+                    module = importlib.import_module(module_name)
+                except ModuleNotFoundError as ex:
+                    raise RuntimeError(
+                        f"No pude importar el módulo '{module_name}': {ex}. Asegúrate de que esté en PYTHONPATH."
+                    )
+
+                if not hasattr(module, class_name):
+                    raise RuntimeError(f"El módulo '{module_name}' no contiene la clase '{class_name}'")
+
+                EncoderClass = getattr(module, class_name)
+
+                # prepare init kwargs from config (drop _target_)
+                init_kwargs = {}
+                if isinstance(config, dict):
+                    init_kwargs = {k: v for k, v in config.items() if k != "_target_"}
+
+                # try instantiate with config kwargs, fallback to no-arg
+                try:
+                    model = EncoderClass(**init_kwargs)
+                except Exception:
+                    try:
+                        model = EncoderClass()
+                    except Exception as ex:
+                        raise RuntimeError(
+                            f"No pude instanciar la clase encoder '{class_name}': {ex}. "
+                            "Si la clase requiere argumentos, provee --encoder_arch y/o --encoder_init_args."
+                        )
+
+                try:
+                    model.load_state_dict(state_dict)
+                except Exception as ex:
+                    raise RuntimeError(f"load_state_dict falló: {ex}")
+
+                model.to(device)
+                model.eval()
+                return model, "instantiated_from_checkpoint"
+
+        # If dict but not wrapped or instantiation failed, allow user-provided simple state_dict
+        if encoder_arch:
+            # user wanted to instantiate using explicit module:Class (handled above if wrapped),
+            # but maybe the file is a plain state_dict
+            try:
+                module_name, class_name = encoder_arch.split(":")
+            except Exception:
+                raise RuntimeError("--encoder_arch debe tener formato 'module.path:ClassName'")
+
+            try:
+                module = importlib.import_module(module_name)
+            except ModuleNotFoundError as ex:
+                raise RuntimeError(
+                    f"No pude importar el módulo '{module_name}': {ex}. Asegúrate de que esté en PYTHONPATH."
+                )
+
+            if not hasattr(module, class_name):
+                raise RuntimeError(f"El módulo '{module_name}' no contiene la clase '{class_name}'")
+
+            EncoderClass = getattr(module, class_name)
+            try:
+                model = EncoderClass()
+            except TypeError as ex:
+                raise RuntimeError(
+                    f"No pude instanciar '{class_name}' sin argumentos: {ex}. "
+                    "Si la clase requiere parámetros, instancia el encoder manualmente and save as TorchScript or module."
+                )
+
+            model.load_state_dict(obj)
+            model.to(device)
+            model.eval()
+            return model, "instantiated_from_state_dict"
+
         raise RuntimeError(
-            "El encoder parece estar guardado como state_dict (dict). "
-            "Para usarlo aquí necesitas instanciar la arquitectura del encoder "
-            "y hacer model.load_state_dict(state_dict)."
+            "El encoder parece estar guardado como state_dict (dict). Para usarlo aquí necesitas instanciar la arquitectura del encoder y hacer model.load_state_dict(state_dict). "
+            "Si el checkpoint incluye 'config' con '_target_', el script intentó usarlo para instanciar el encoder automáticamente. "
+            "Si eso falló, provee --encoder_arch 'module.path.ClassName' y opcionalmente --encoder_init_args."
         )
 
     raise RuntimeError(f"No pude interpretar encoder: {encoder_model_path}")
+
 
 
 @torch.no_grad()
@@ -209,6 +306,12 @@ def main():
     ap.add_argument("--output_dir", type=str, default=None, help="Directorio de salida de imágenes")
     ap.add_argument("--config_path", type=str, default=None, help="config.json para guardar centros/radios")
     ap.add_argument("--save_config", action="store_true", help="Si se setea, escribe center/radius en config.json")
+    ap.add_argument(
+        "--encoder_arch",
+        type=str,
+        default=None,
+        help="Opcional: ruta de import para la clase encoder en formato 'module.path:ClassName' para instanciar cuando el archivo es un state_dict",
+    )
 
     ap.add_argument("--sr", type=int, default=22050)
     ap.add_argument("--duration", type=float, default=3.0)
@@ -274,7 +377,7 @@ def main():
     print(f"📊 Base: n={n_base}, latent_dim={d}")
 
     # 2) Encoder + z_new
-    encoder, mode = load_encoder_model(encoder_path, device=args.device)
+    encoder, mode = load_encoder_model(encoder_path, device=args.device, encoder_arch=args.encoder_arch)
     print(f"✅ Encoder cargado ({mode}).")
 
     mel_db = load_audio_mel(
