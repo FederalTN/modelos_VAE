@@ -4,4 +4,4 @@ venv/
 .env
 model.pt
 .parquet
-.wav
+*.wav

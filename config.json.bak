@@ -1,6 +1,6 @@
 {
-  "root_dir": "./train",
+  "root_dir": "./test",
   "chunk_seconds": 5.0,
-  "output_dir": "./train_chunks",
+  "output_dir": "./test_chunks",
   "species": ["Batrachyla_leptopus", "Batrachyla_taeniata", "Calyptocephalella_gayi", "Pleurodema_thaul"]
 }

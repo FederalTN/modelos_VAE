@@ -1,7 +1,7 @@
 {
-  "root_dir": "./train",
+  "root_dir": "./test",
   "chunk_seconds": 5.0,
-  "output_dir": "./train_chunks",
+  "output_dir": "./test_chunks",
   "center": {
     "x": 0.20068666338920593,
     "y": 1.1610852479934692
