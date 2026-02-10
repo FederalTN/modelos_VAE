@@ -1,0 +1,10 @@
+=== Detection Benchmark Summary ===
+Total files: 774
+Correct: 211  | Accuracy: 27.26%
+NO_DETECT: 2 | Rate: 0.26%
+
+=== Per-class ===
+- Batrachyla_leptopus             n= 154  acc= 99.35%  no_detect=  0.00%
+- Calyptocephalella_gayi          n=  41  acc= 19.51%  no_detect=  0.00%
+- Batrachyla_taeniata             n= 521  acc=  9.60%  no_detect=  0.38%
+- Pleurodema_thaul                n=  58  acc=  0.00%  no_detect=  0.00%
